@@ -22,11 +22,16 @@ class Detector:
         self.fps = 0.0
         self.running = True
         self.lock = threading.Lock()
+        self.new_frame = threading.Event()
         self.thread = threading.Thread(target=self._detect)
         self.thread.start()
 
     def _detect(self):
         while self.running:
+            self.new_frame.wait()
+            if not self.running:
+                break
+            self.new_frame.clear()
             with self.lock:
                 frame = self.frame
             if frame is not None:
@@ -40,6 +45,7 @@ class Detector:
     def update_frame(self, frame):
         with self.lock:
             self.frame = frame.copy()
+        self.new_frame.set()
 
     def get_results(self):
         with self.lock:
@@ -47,6 +53,7 @@ class Detector:
 
     def stop(self):
         self.running = False
+        self.new_frame.set()
         self.thread.join()
 
 
