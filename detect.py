@@ -5,6 +5,8 @@ import cv2
 import torch
 from ultralytics.models import YOLO
 
+SINGLE_THREADED = False
+
 
 def get_device() -> str:
     if torch.cuda.is_available():
@@ -15,20 +17,18 @@ def get_device() -> str:
 
 
 class Detector:
-    def __init__(self, model: YOLO):
+    def __init__(self, model):
         self.device = get_device()
         self.model = model
-
-        self._frame = None
         self._results = None
-        self._result_frame = None
-        self._fps = 0.0
-        self._new_frame_available = threading.Event()
 
-        self._running = True
-        self._lock = threading.Lock()
-        self._thread = threading.Thread(target=self._detect, daemon=True)
-        self._thread.start()
+        if not SINGLE_THREADED:
+            self._frame = None
+            self._new_frame_available = threading.Event()
+            self._running = True
+            self._lock = threading.Lock()
+            self._thread = threading.Thread(target=self._detect, daemon=True)
+            self._thread.start()
 
     def _detect(self):
         while self._running:
@@ -42,28 +42,31 @@ class Detector:
             if frame is None:
                 continue
 
-            start = time.perf_counter()
             results = self.model(frame, verbose=False, device=self.device)
-            elapsed = time.perf_counter() - start
 
             with self._lock:
                 self._results = results
-                self._result_frame = frame
-                self._fps = 1.0 / elapsed if elapsed > 0 else 0.0
 
     def update_frame(self, frame):
-        with self._lock:
-            self._frame = frame.copy()
-        self._new_frame_available.set()
+        if SINGLE_THREADED:
+            self._results = self.model(frame, verbose=False, device=self.device)
+        else:
+            with self._lock:
+                self._frame = frame.copy()
+            self._new_frame_available.set()
 
     def get_results(self):
-        with self._lock:
-            return self._results, self._fps
+        if SINGLE_THREADED:
+            return self._results
+        else:
+            with self._lock:
+                return self._results
 
     def stop(self):
-        self._running = False
-        self._new_frame_available.set()
-        self._thread.join(timeout=2.0)
+        if not SINGLE_THREADED:
+            self._running = False
+            self._new_frame_available.set()
+            self._thread.join(timeout=2.0)
 
 
 def main():
@@ -83,6 +86,7 @@ def main():
     window_name = "Object Detection - Press 'q' to quit"
 
     while True:
+        start = time.perf_counter()
         ret, frame = cap.read()
         if not ret or frame is None:
             continue
@@ -94,14 +98,14 @@ def main():
         detector.update_frame(frame)
 
         # Get latest results
-        results, fps = detector.get_results()
+        results = detector.get_results()
         if results is None:
             continue
 
         # Draw results on the frame that was used for detection
         annotated_frame = results[0].plot(img=frame)
 
-        # Show detection FPS
+        fps = 1.0 / (time.perf_counter() - start)
         cv2.putText(
             annotated_frame,
             f"Detection FPS: {fps:.1f}",
