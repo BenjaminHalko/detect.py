@@ -57,9 +57,8 @@ class Detector:
         self._new_frame_available.set()
 
     def get_results(self):
-        """Returns (results, frame_used_for_results, fps)"""
         with self._lock:
-            return self._results, self._result_frame, self._fps
+            return self._results, self._fps
 
     def stop(self):
         self._running = False
@@ -95,12 +94,12 @@ def main():
         detector.update_frame(frame)
 
         # Get latest results
-        results, result_frame, fps = detector.get_results()
-        if results is None or result_frame is None:
+        results, fps = detector.get_results()
+        if results is None:
             continue
 
         # Draw results on the frame that was used for detection
-        annotated_frame = results[0].plot(img=result_frame)
+        annotated_frame = results[0].plot(img=frame)
 
         # Show detection FPS
         cv2.putText(
