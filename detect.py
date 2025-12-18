@@ -1,6 +1,5 @@
 import threading
 import time
-from typing import Any, Optional, Tuple
 
 import cv2
 import torch
@@ -57,7 +56,7 @@ class Detector:
             self._frame = frame.copy()
         self._new_frame_available.set()
 
-    def get_results(self) -> Tuple[Optional[Any], Optional[Any], float]:
+    def get_results(self):
         """Returns (results, frame_used_for_results, fps)"""
         with self._lock:
             return self._results, self._result_frame, self._fps
