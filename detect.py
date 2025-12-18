@@ -1,12 +1,13 @@
 import threading
 import time
+from typing import Any, Optional, Tuple
 
 import cv2
 import torch
 from ultralytics.models import YOLO
 
 
-def get_device():
+def get_device() -> str:
     if torch.cuda.is_available():
         return "cuda"
     if torch.backends.mps.is_available():
@@ -15,52 +16,64 @@ def get_device():
 
 
 class Detector:
-    def __init__(self, model):
+    def __init__(self, model: YOLO):
+        self.device = get_device()
         self.model = model
-        self.frame = None
-        self.results = None
-        self.fps = 0.0
-        self.running = True
-        self.lock = threading.Lock()
-        self.new_frame = threading.Event()
-        self.thread = threading.Thread(target=self._detect)
-        self.thread.start()
+
+        self._frame = None
+        self._results = None
+        self._result_frame = None
+        self._fps = 0.0
+        self._new_frame_available = threading.Event()
+
+        self._running = True
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._detect, daemon=True)
+        self._thread.start()
 
     def _detect(self):
-        while self.running:
-            self.new_frame.wait()
-            if not self.running:
-                break
-            self.new_frame.clear()
-            with self.lock:
-                frame = self.frame
-            if frame is not None:
-                start = time.time()
-                results = self.model(frame, verbose=False, device=get_device())
-                elapsed = time.time() - start
-                with self.lock:
-                    self.results = results
-                    self.fps = 1.0 / elapsed if elapsed > 0 else 0.0
+        while self._running:
+            if not self._new_frame_available.wait(timeout=0.1):
+                continue
+
+            with self._lock:
+                frame = self._frame
+                self._new_frame_available.clear()
+
+            if frame is None:
+                continue
+
+            start = time.perf_counter()
+            results = self.model(frame, verbose=False, device=self.device)
+            elapsed = time.perf_counter() - start
+
+            with self._lock:
+                self._results = results
+                self._result_frame = frame
+                self._fps = 1.0 / elapsed if elapsed > 0 else 0.0
 
     def update_frame(self, frame):
-        with self.lock:
-            self.frame = frame.copy()
-        self.new_frame.set()
+        with self._lock:
+            self._frame = frame.copy()
+        self._new_frame_available.set()
 
-    def get_results(self):
-        with self.lock:
-            return self.results, self.fps
+    def get_results(self) -> Tuple[Optional[Any], Optional[Any], float]:
+        """Returns (results, frame_used_for_results, fps)"""
+        with self._lock:
+            return self._results, self._result_frame, self._fps
 
     def stop(self):
-        self.running = False
-        self.new_frame.set()
-        self.thread.join()
+        self._running = False
+        self._new_frame_available.set()
+        self._thread.join(timeout=2.0)
 
 
 def main():
     print("Loading model...")
     model = YOLO("yolov8x-oiv7.pt")
-    print(f"Using device: {get_device()}")
+    detector = Detector(model)
+
+    print(f"Using device: {detector.device}")
 
     print("Starting camera...")
     cap = cv2.VideoCapture(0)
@@ -70,8 +83,6 @@ def main():
 
     print("Opening window...")
     window_name = "Object Detection - Press 'q' to quit"
-
-    detector = Detector(model)
 
     while True:
         ret, frame = cap.read()
@@ -85,12 +96,12 @@ def main():
         detector.update_frame(frame)
 
         # Get latest results
-        results, fps = detector.get_results()
-        if results is None:
+        results, result_frame, fps = detector.get_results()
+        if results is None or result_frame is None:
             continue
 
-        # Draw results
-        annotated_frame = results[0].plot(img=frame)
+        # Draw results on the frame that was used for detection
+        annotated_frame = results[0].plot(img=result_frame)
 
         # Show detection FPS
         cv2.putText(
